@@ -191,7 +191,7 @@ std::string CrealityPrint::make_url(const std::string &path) const
     // Users often enter the Fluidd/Moonraker web UI URL so Orca's Device tab opens.
     // Creality's upload and /info API still live on the base printer HTTP host.
     std::string base = (https ? "https://" : "http://") + (host.empty() ? m_host : host);
-    if (!port.empty() && port != "4408" && port != "7125" &&
+    if (!port.empty() && port != "4408" && port != "7125" && port != "8000" &&
         !(https && port == "443") && !(!https && port == "80"))
         base += ":" + port;
 
@@ -348,14 +348,6 @@ static void ws_connect(net::io_context& ioc, websocket::stream<beast::tcp_stream
         }));
     beast::get_lowest_layer(ws).expires_after(std::chrono::seconds(5));
     ws.handshake(host, "/");
-
-#ifdef _WIN32
-    DWORD recv_timeout = 3000;
-#else
-    struct timeval recv_timeout = {3, 0};
-#endif
-    setsockopt(beast::get_lowest_layer(ws).socket().native_handle(),
-               SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&recv_timeout), sizeof(recv_timeout));
 }
 
 static void ws_write_json(websocket::stream<beast::tcp_stream>& ws, const json& cmd)
@@ -371,10 +363,33 @@ static bool ws_is_timeout(beast::error_code ec)
         || ec == beast::error::timeout;
 }
 
+static bool ws_is_clean_end(beast::error_code ec)
+{
+    return ec == websocket::error::closed
+        || ec == net::error::eof
+        || ec == beast::http::error::end_of_stream;
+}
+
+static bool ws_try_write_json(websocket::stream<beast::tcp_stream>& ws, const json& cmd, const char* label)
+{
+    beast::get_lowest_layer(ws).expires_after(std::chrono::seconds(3));
+    beast::error_code ec;
+    ws.write(net::buffer(cmd.dump()), ec);
+    if (!ec)
+        return true;
+    if (ws_is_clean_end(ec)) {
+        BOOST_LOG_TRIVIAL(warning) << "CrealityPrint: Websocket closed while sending " << label
+                                   << "; command may have been accepted by firmware";
+        return false;
+    }
+    throw beast::system_error{ec};
+}
+
 static std::string ws_send_and_read(websocket::stream<beast::tcp_stream>& ws, const json& cmd, const std::string& expected_key, int max_reads = 20)
 {
     ws_write_json(ws, cmd);
 
+    std::string last_msg;
     for (int i = 0; i < max_reads; i++) {
         beast::flat_buffer buf;
         beast::error_code ec;
@@ -382,12 +397,20 @@ static std::string ws_send_and_read(websocket::stream<beast::tcp_stream>& ws, co
         ws.read(buf, ec);
         if (ws_is_timeout(ec))
             break;
+        if (ws_is_clean_end(ec)) {
+            BOOST_LOG_TRIVIAL(warning) << "CrealityPrint: Websocket closed while waiting for '" << expected_key
+                                       << "' after " << i << " message(s)";
+            break;
+        }
         if (ec)
             throw beast::system_error{ec};
         std::string msg = beast::buffers_to_string(buf.data());
+        last_msg = msg;
         if (msg.find(expected_key) != std::string::npos)
             return msg;
     }
+    if (!last_msg.empty() && expected_key.empty())
+        return last_msg;
     BOOST_LOG_TRIVIAL(warning) << "CrealityPrint: No '" << expected_key << "' response after " << max_reads << " messages";
     return {};
 }
@@ -405,10 +428,17 @@ bool CrealityPrint::supports_multi_color_print() const
 {
     query_model();
     // Creality printers verified to expose the CFS control path on websocket port 9999.
-    return m_model == "F008"    // K2 Plus
-        || m_model == "F012"    // K2 Pro
-        || m_model == "F021"    // K2
-        || m_model == "F018";   // Hi
+    if (m_model == "F008"    // K2 Plus
+        || m_model == "F012" // K2 Pro
+        || m_model == "F021" // K2
+        || m_model == "F018") // Hi
+        return true;
+
+    // Some firmware / host-url combinations do not answer /info correctly, while
+    // the CFS websocket still returns valid slot data. Treat that as authoritative.
+    const std::string boxes_json = query_boxes_info();
+    return boxes_json.find("\"boxsInfo\"") != std::string::npos
+        || boxes_json.find("\"materialBoxs\"") != std::string::npos;
 }
 
 std::string CrealityPrint::model_name() const
@@ -428,37 +458,44 @@ std::string CrealityPrint::model_name() const
 
 std::string CrealityPrint::query_boxes_info() const
 {
-    try {
-        net::io_context ioc;
-        websocket::stream<beast::tcp_stream> ws{ioc};
-        ws_connect(ioc, ws, m_host, "9999");
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        try {
+            net::io_context ioc;
+            websocket::stream<beast::tcp_stream> ws{ioc};
+            ws_connect(ioc, ws, m_host, "9999");
 
-        json boxs_query = {{"method", "get"}, {"params", {{"boxsInfo", 1}}}};
-        std::string result = ws_send_and_read(ws, boxs_query, "boxsInfo");
-        ws.close(websocket::close_code::normal);
-        return result;
-    } catch (std::exception const& e) {
-        BOOST_LOG_TRIVIAL(error) << "CrealityPrint: Failed to query boxsInfo: " << e.what();
-        return {};
+            json boxs_query = {{"method", "get"}, {"params", {{"boxsInfo", 1}}}};
+            std::string result = ws_send_and_read(ws, boxs_query, "boxsInfo", 30);
+            beast::error_code close_ec;
+            ws.close(websocket::close_code::normal, close_ec);
+            if (!result.empty())
+                return result;
+
+            BOOST_LOG_TRIVIAL(warning) << "CrealityPrint: Empty boxsInfo response on attempt " << (attempt + 1);
+        } catch (std::exception const& e) {
+            BOOST_LOG_TRIVIAL(error) << "CrealityPrint: Failed to query boxsInfo on attempt " << (attempt + 1) << ": " << e.what();
+        }
     }
+    return {};
 }
 
 std::vector<CrealityPrint::CfsSlotInfo> CrealityPrint::query_cfs_slots(bool include_external_spool) const
 {
     std::vector<CfsSlotInfo> slots;
 
-    if (!supports_multi_color_print())
-        return slots;
-
     const std::string boxes_json = query_boxes_info();
-    if (boxes_json.empty())
+    if (boxes_json.empty()) {
+        BOOST_LOG_TRIVIAL(warning) << "CrealityPrint: CFS boxsInfo query returned no data";
         return slots;
+    }
 
     try {
         auto resp = json::parse(boxes_json);
         if (!resp.contains("boxsInfo") || !resp["boxsInfo"].contains("materialBoxs") ||
-            !resp["boxsInfo"]["materialBoxs"].is_array())
+            !resp["boxsInfo"]["materialBoxs"].is_array()) {
+            BOOST_LOG_TRIVIAL(warning) << "CrealityPrint: CFS boxsInfo response did not contain materialBoxs";
             return slots;
+        }
 
         for (const auto& box : resp["boxsInfo"]["materialBoxs"]) {
             if (!box.is_object())
@@ -539,6 +576,7 @@ std::vector<CrealityPrint::CfsSlotInfo> CrealityPrint::query_cfs_slots(bool incl
         BOOST_LOG_TRIVIAL(error) << "CrealityPrint: Failed to parse boxsInfo slots: " << e.what();
     }
 
+    BOOST_LOG_TRIVIAL(info) << "CrealityPrint: Parsed " << slots.size() << " CFS slots";
     return slots;
 }
 
@@ -786,7 +824,7 @@ bool CrealityPrint::start_print(wxString &msg, const std::string &filename, cons
                         {"enableSelfTest", enable_self_test}
                     }}
                 };
-                ws_write_json(ws, cmd);
+                ws_try_write_json(ws, cmd, "opGcodeFile");
             } else {
                 json color_match = {
                     {"method", "set"},
@@ -797,7 +835,7 @@ bool CrealityPrint::start_print(wxString &msg, const std::string &filename, cons
                         }}
                     }}
                 };
-                ws_write_json(ws, color_match);
+                bool color_match_sent = ws_try_write_json(ws, color_match, "colorMatch");
 
                 json multi_color_print = {
                     {"method", "set"},
@@ -808,7 +846,8 @@ bool CrealityPrint::start_print(wxString &msg, const std::string &filename, cons
                         }}
                     }}
                 };
-                ws_write_json(ws, multi_color_print);
+                if (color_match_sent)
+                    ws_try_write_json(ws, multi_color_print, "multiColorPrint");
             }
         } else {
             json cmd = {
@@ -817,17 +856,20 @@ bool CrealityPrint::start_print(wxString &msg, const std::string &filename, cons
                     {"opGcodeFile", "printprt:/usr/data/printer_data/gcodes/" + filename}
                 }}
             };
-            ws_write_json(ws, cmd);
+            ws_try_write_json(ws, cmd, "opGcodeFile");
 
             beast::flat_buffer buffer;
             beast::error_code ec;
             beast::get_lowest_layer(ws).expires_after(std::chrono::seconds(3));
             ws.read(buffer, ec);
-            if (ec && !ws_is_timeout(ec))
+            if (ec && !ws_is_timeout(ec) && !ws_is_clean_end(ec))
                 throw beast::system_error{ec};
         }
 
-        ws.close(websocket::close_code::normal);
+        beast::error_code close_ec;
+        ws.close(websocket::close_code::normal, close_ec);
+        if (close_ec && !ws_is_clean_end(close_ec))
+            BOOST_LOG_TRIVIAL(warning) << "CrealityPrint: Ignoring websocket close error after start command: " << close_ec.message();
         return true;
     } catch(std::exception const& e) {
         BOOST_LOG_TRIVIAL(error) << "CrealityPrint: Error starting print: " << e.what();
