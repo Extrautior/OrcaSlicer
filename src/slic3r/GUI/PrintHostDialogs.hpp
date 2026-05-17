@@ -2,7 +2,9 @@
 #define slic3r_PrintHostSendDialog_hpp_
 
 #include <set>
+#include <map>
 #include <string>
+#include <vector>
 #include <boost/filesystem/path.hpp>
 
 #include <wx/string.h>
@@ -20,8 +22,10 @@ class wxComboBox;
 class wxDataViewListCtrl;
 
 namespace Slic3r {
+class PrintHost;
 
 namespace GUI {
+class BitmapComboBox;
 
 class PrintHostSendDialog : public GUI::MsgDialog
 {
@@ -178,6 +182,37 @@ private:
     int     m_timeLapse;
     int     m_heatedBedLeveling;
     BedType m_BedType;
+};
+
+class CrealityPrintHostSendDialog : public PrintHostSendDialog
+{
+public:
+    CrealityPrintHostSendDialog(const boost::filesystem::path& path,
+                                PrintHostPostUploadActions     post_actions,
+                                const wxArrayString&           groups,
+                                const wxArrayString&           storage_paths,
+                                const wxArrayString&           storage_names,
+                                bool                           switch_to_device_tab,
+                                PrintHost*                     printhost);
+
+    virtual void                               init() override;
+    virtual std::map<std::string, std::string> extendedInfo() const override;
+
+private:
+    struct PrinterSlot {
+        std::string tool_id;
+        std::string type;
+        std::string color;
+        int         box_id = 0;
+        int         material_id = 0;
+    };
+
+    const char* CONFIG_KEY_ENABLESELFTEST = "crealityprint_enable_self_test";
+
+    bool m_enableSelfTest {false};
+    PrintHost* m_printhost {nullptr};
+    std::vector<PrinterSlot> m_printer_slots;
+    std::vector<BitmapComboBox*> m_slot_combos;
 };
 
 wxDECLARE_EVENT(EVT_PRINTHOST_PROGRESS, PrintHostQueueDialog::Event);

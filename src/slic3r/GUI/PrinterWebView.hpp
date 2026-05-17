@@ -1,35 +1,14 @@
 #ifndef slic3r_PrinterWebView_hpp_
 #define slic3r_PrinterWebView_hpp_
 
-
-#include "wx/artprov.h"
-#include "wx/cmdline.h"
-#include "wx/notifmsg.h"
-#include "wx/settings.h"
-#include <wx/webview.h>
-#include <wx/string.h>
-
-#if wxUSE_WEBVIEW_EDGE
-#include "wx/msw/webview_edge.h"
-#endif
-
-#include "wx/webviewarchivehandler.h"
-#include "wx/webviewfshandler.h"
-#include "wx/numdlg.h"
-#include "wx/infobar.h"
-#include "wx/filesys.h"
-#include "wx/fs_arc.h"
-#include "wx/fs_mem.h"
-#include "wx/stdpaths.h"
+#include <nlohmann/json.hpp>
 #include <wx/panel.h>
-#include <wx/tbarbase.h>
-#include "wx/textctrl.h"
+#include <wx/string.h>
 #include <wx/timer.h>
-
+#include <wx/webview.h>
 
 namespace Slic3r {
 namespace GUI {
-
 
 class PrinterWebView : public wxPanel {
 public:
@@ -41,6 +20,10 @@ public:
     void OnClose(wxCloseEvent& evt);
     void OnError(wxWebViewEvent& evt);
     void OnLoaded(wxWebViewEvent& evt);
+    void OnNavigating(wxWebViewEvent& evt);
+    void OnScriptMessage(wxWebViewEvent& evt);
+    void OnCrealityCameraKeepAlive(wxTimerEvent& evt);
+    void resume_creality_page();
     void reload();
     void update_mode();
 
@@ -48,18 +31,29 @@ public:
 
 private:
     void SendAPIKey();
+    bool current_printer_is_creality_print() const;
+    wxString creality_device_page_url() const;
+    wxString resolve_url_for_current_printer(const wxString& requested_url);
+    nlohmann::json query_creality_info(const std::string& address) const;
+    nlohmann::json build_creality_device_data() const;
+    nlohmann::json load_creality_machine_list() const;
+    nlohmann::json current_creality_device_ref() const;
+    void send_creality_command(const std::string& command, const nlohmann::json& data);
+    void send_creality_capabilities();
+    void send_creality_initial_state();
+    void handle_creality_script_message(const nlohmann::json& message);
 
-    wxWebView* m_browser;
-    long m_zoomFactor;
+    wxWebView* m_browser { nullptr };
+    long m_zoomFactor { 100 };
     wxString m_apikey;
-    bool m_apikey_sent;
-
+    bool m_apikey_sent { false };
     wxString m_url_deferred;
-
-    // DECLARE_EVENT_TABLE()
+    bool m_creality_device_page_active { false };
+    bool m_creality_init_sent { false };
+    wxTimer m_creality_camera_keepalive_timer;
 };
 
 } // GUI
 } // Slic3r
 
-#endif /* slic3r_Tab_hpp_ */
+#endif /* slic3r_PrinterWebView_hpp_ */

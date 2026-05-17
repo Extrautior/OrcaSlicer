@@ -228,6 +228,37 @@ bool is_flush_config_modified()
     return has_modify;
 }
 
+static bool is_creality_print_host()
+{
+    PresetBundle* preset_bundle = wxGetApp().preset_bundle;
+    if (!preset_bundle)
+        return false;
+
+    const DynamicPrintConfig& cfg = preset_bundle->printers.get_edited_preset().config;
+    const auto* host_type_opt = cfg.option<ConfigOptionEnum<PrintHostType>>("host_type");
+    return host_type_opt && host_type_opt->value == htCrealityPrint;
+}
+
+static void bake_flush_multipliers_into_matrix_for_creality(std::vector<double>& matrix, std::vector<double>& multipliers)
+{
+    if (!is_creality_print_host() || matrix.empty() || multipliers.empty())
+        return;
+
+    const size_t heads_count = multipliers.size();
+    if (matrix.size() % heads_count != 0)
+        return;
+
+    const size_t values_per_head = matrix.size() / heads_count;
+    for (size_t head = 0; head < heads_count; ++head) {
+        const double multiplier = multipliers[head];
+        const size_t begin = head * values_per_head;
+        const size_t end = begin + values_per_head;
+        for (size_t i = begin; i < end; ++i)
+            matrix[i] = std::round(std::clamp(matrix[i] * multiplier, 0.0, static_cast<double>(g_max_flush_volume)));
+        multipliers[head] = 1.0;
+    }
+}
+
 void open_flushing_dialog(wxEvtHandler *parent, const wxEvent &event)
 {
     auto                      &project_config = wxGetApp().preset_bundle->project_config;
@@ -237,6 +268,7 @@ void open_flushing_dialog(wxEvtHandler *parent, const wxEvent &event)
     if (dlg.GetSubmitFlag()) {
         auto matrix = dlg.GetFlattenMatrix();
         auto flush_multipliers = dlg.GetMultipliers();
+        bake_flush_multipliers_into_matrix_for_creality(matrix, flush_multipliers);
         (project_config.option<ConfigOptionFloats>("flush_volumes_matrix"))->values = std::vector<double>(matrix.begin(), matrix.end());
         (project_config.option<ConfigOptionFloats>("flush_multiplier"))->values = std::vector<double>(flush_multipliers.begin(), flush_multipliers.end());
         bool flushing_volume_modify = is_flush_config_modified();

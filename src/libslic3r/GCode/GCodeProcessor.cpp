@@ -114,6 +114,7 @@ const float GCodeProcessor::Wipe_Width = 0.05f;
 const float GCodeProcessor::Wipe_Height = 0.05f;
 
 bool GCodeProcessor::s_IsBBLPrinter = true;
+bool GCodeProcessor::s_IsCrealityPrintHost = false;
 
 static void set_option_value(ConfigOptionFloats& option, size_t id, float value)
 {
@@ -1031,6 +1032,12 @@ void GCodeProcessor::run_post_process()
                             export_line.append_line(format_line_M73_stop_int(machine.line_m73_stop_mask.c_str(), to_export_stop));
                             last_exported_stop[i] = to_export_stop;
                         }
+                        if (s_IsCrealityPrintHost && line == reserved_tag(ETags::Last_Line_M73_Placeholder) &&
+                            i == static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)) {
+                            char buf[64];
+                            sprintf(buf, ";TIME_ELAPSED:%.6f\n", machine.time);
+                            export_line.append_line(buf);
+                        }
                     }
                 }
             } else if (line == reserved_tag(ETags::Estimated_Printing_Time_Placeholder)) {
@@ -1159,6 +1166,19 @@ void GCodeProcessor::run_post_process()
     auto g1_times_cache_it = Slic3r::reserve_vector<std::vector<TimeMachine::G1LinesCacheItem>::const_iterator>(m_time_processor.machines.size());
     for (const auto& machine : m_time_processor.machines)
         g1_times_cache_it.emplace_back(machine.g1_times_cache.begin());
+
+    auto creality_elapsed_at_g1 = [&self = std::as_const(m_time_processor)](const size_t g1_counter) {
+        const TimeMachine& machine = self.machines[static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Normal)];
+        float elapsed_time = 0.0f;
+        for (const TimeMachine::G1LinesCacheItem& item : machine.g1_times_cache) {
+            if (item.id >= g1_counter)
+                break;
+            elapsed_time = item.elapsed_time;
+        }
+        return elapsed_time;
+    };
+
+    bool creality_seen_layer_change = false;
 
     // add lines M73 to exported gcode
     auto process_line_move = [
@@ -1351,6 +1371,19 @@ void GCodeProcessor::run_post_process()
                 if (eol) {
                     ++line_id;
                     const unsigned int internal_g1_lines_counter = export_line.update(gcode_line, line_id, g1_lines_counter);
+                    if (s_IsCrealityPrintHost) {
+                        std::string_view creality_line(gcode_line);
+                        while (!creality_line.empty() && (creality_line.back() == '\n' || creality_line.back() == '\r'))
+                            creality_line.remove_suffix(1);
+                        if (creality_line == ";LAYER_CHANGE") {
+                            if (creality_seen_layer_change) {
+                                char buf[64];
+                                sprintf(buf, ";TIME_ELAPSED:%.6f\n", creality_elapsed_at_g1(g1_lines_counter));
+                                export_line.append_line(buf);
+                            }
+                            creality_seen_layer_change = true;
+                        }
+                    }
                     // replace placeholder lines
                     bool processed = process_placeholders(gcode_line);
                     if (processed)

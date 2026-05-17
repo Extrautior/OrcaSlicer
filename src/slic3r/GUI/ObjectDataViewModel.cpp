@@ -1490,8 +1490,10 @@ bool ObjectDataViewModel::UpdateColumValues(unsigned col)
 
         if (items.IsEmpty()) return false;
 
-        for (auto item : items)
+        for (auto item : items) {
             UpdateExtruderBitmap(item);
+            ItemChanged(item);
+        }
 
         return true;
     }
@@ -1617,8 +1619,10 @@ void ObjectDataViewModel::UpdateVolumesExtruderBitmap(wxDataViewItem obj_item, b
         return;
     ObjectDataViewModelNode* obj_node = static_cast<ObjectDataViewModelNode*>(obj_item.GetID());
     for (auto child : obj_node->GetChildren())
-        if (child->GetVolumeType() == ModelVolumeType::MODEL_PART)
+        if (child->GetVolumeType() == ModelVolumeType::MODEL_PART) {
             child->UpdateExtruderAndColorIcon(use_obj_extruder ? obj_node->GetExtruder() : "");
+            ItemChanged(wxDataViewItem(child));
+        }
 }
 
 int ObjectDataViewModel::GetDefaultExtruderIdx(wxDataViewItem item)

@@ -363,6 +363,7 @@ class Print;
         static const float Wipe_Height;
 
         static bool s_IsBBLPrinter;
+        static bool s_IsCrealityPrintHost;
 
     private:
         using AxisCoords = std::array<double, 4>;

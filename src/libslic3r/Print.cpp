@@ -3485,6 +3485,7 @@ void Print::export_gcode_from_previous_file(const std::string& file, GCodeProces
     try {
         GCodeProcessor processor;
         GCodeProcessor::s_IsBBLPrinter = is_BBL_printer();
+        GCodeProcessor::s_IsCrealityPrintHost = false;
         const Vec3d origin = this->get_plate_origin();
         processor.set_xy_offset(origin(0), origin(1));
         //processor.enable_producers(true);

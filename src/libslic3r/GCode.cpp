@@ -2007,6 +2007,11 @@ void GCode::do_export(Print* print, const char* path, GCodeProcessorResult* resu
     BOOST_LOG_TRIVIAL(info) << boost::format("Will export G-code to %1% soon")%path;
 
     GCodeProcessor::s_IsBBLPrinter = print->is_BBL_printer();
+    {
+        DynamicPrintConfig cfg = print->full_print_config();
+        const auto* host_type_opt = cfg.option<ConfigOptionEnum<PrintHostType>>("host_type");
+        GCodeProcessor::s_IsCrealityPrintHost = host_type_opt && host_type_opt->value == htCrealityPrint;
+    }
     m_writer.set_is_bbl_machine(print->is_BBL_printer());
     print->set_started(psGCodeExport);
 
@@ -4401,7 +4406,7 @@ LayerResult GCode::process_layer(
     gcode += ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Layer_Change) + "\n";
     // export layer z
     char buf[64];
-    sprintf(buf, print.is_BBL_printer() ? "; Z_HEIGHT: %g\n" : ";Z:%g\n", print_z);
+    sprintf(buf, print.is_BBL_printer() ? "; Z_HEIGHT: %g\n" : (GCodeProcessor::s_IsCrealityPrintHost ? ";:%g\n" : ";Z:%g\n"), print_z);
     gcode += buf;
     // export layer height
     float height = first_layer ? static_cast<float>(print_z) : static_cast<float>(print_z) - m_last_layer_z;
@@ -4467,6 +4472,9 @@ LayerResult GCode::process_layer(
             print.config().layer_change_gcode.value, m_writer.filament()->id(), &config)
             + "\n";
         config.set_key_value("max_layer_z", new ConfigOptionFloat(m_max_layer_z));
+    } else if (GCodeProcessor::s_IsCrealityPrintHost) {
+        sprintf(buf, ";AFTER_LAYER_CHANGE\n;%g\n", print_z);
+        gcode += buf;
     }
     //BBS: set layer time fan speed after layer change gcode
     gcode += ";_SET_FAN_SPEED_CHANGING_LAYER\n";
@@ -5389,6 +5397,8 @@ void GCode::apply_print_config(const PrintConfig &print_config)
 void GCode::append_full_config(const Print &print, std::string &str)
 {
     DynamicPrintConfig cfg = print.full_print_config();
+    const auto* host_type_opt = cfg.option<ConfigOptionEnum<PrintHostType>>("host_type");
+    const bool is_creality_print_host = host_type_opt && host_type_opt->value == htCrealityPrint;
     { // correct the flush_volumes_matrix with flush_multiplier values
         std::vector<double> temp_cfg_flush_multiplier = cfg.option<ConfigOptionFloats>("flush_multiplier")->values;
         std::vector<double> temp_flush_volumes_matrix = cfg.option<ConfigOptionFloats>("flush_volumes_matrix")->values;
@@ -5405,6 +5415,8 @@ void GCode::append_full_config(const Print &print, std::string &str)
                                [temp_cfg_flush_multiplier_idx](double inputx) { return std::round(inputx * temp_cfg_flush_multiplier_idx); });
             }
             cfg.option<ConfigOptionFloats>("flush_volumes_matrix")->values = temp_flush_volumes_matrix;
+            if (is_creality_print_host)
+                cfg.option<ConfigOptionFloats>("flush_multiplier")->values = std::vector<double>(heads_count_tmp, 1.0);
         } else if (filament_count_tmp == 1) {
         } // Not applicable to flush matrix situations
         else { // flush_volumes_matrix value count error?
@@ -5429,6 +5441,8 @@ void GCode::append_full_config(const Print &print, std::string &str)
     std::ostringstream ss;
     for (const std::string& key : cfg.keys()) {
         if (!is_banned(key) && !cfg.option(key)->is_nil()) {
+            if (key == "flush_volumes_matrix")
+                ss << "; flush_volumes_changed = 1\n";
             if (key == "wipe_tower_x" || key == "wipe_tower_y") {
                 ss << std::fixed << std::setprecision(3) << "; " << key << " = " << dynamic_cast<const ConfigOptionFloats*>(cfg.option(key))->get_at(print.get_plate_index()) << "\n";
             }

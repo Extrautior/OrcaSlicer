@@ -273,6 +273,18 @@ void ComboBox::SetItemTooltip(unsigned int n, wxString const &value) {
     if (n == drop.GetSelection()) drop.SetToolTip(value);
 }
 
+wxString ComboBox::GetItemAlias(unsigned int n) const
+{
+    if (n >= items.size()) return wxString();
+    return items[n].alias;
+}
+
+void ComboBox::SetItemAlias(unsigned int n, wxString const &value)
+{
+    if (n >= items.size()) return;
+    items[n].alias = value;
+}
+
 wxBitmap ComboBox::GetItemBitmap(unsigned int n) { return items[n].icon; }
 
 void ComboBox::SetItemBitmap(unsigned int n, wxBitmap const &bitmap)

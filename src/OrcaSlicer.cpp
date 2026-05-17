@@ -5,6 +5,7 @@
     #define WIN32_LEAN_AND_MEAN
     #define NOMINMAX
     #include <Windows.h>
+    #include <CommCtrl.h>
     #include <wchar.h>
     #ifdef SLIC3R_GUI
     extern "C"

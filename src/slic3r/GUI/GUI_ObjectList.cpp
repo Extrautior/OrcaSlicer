@@ -303,6 +303,42 @@ ObjectList::ObjectList(wxWindow* parent) :
         set_tooltip_for_item(this->get_mouse_position_in_control());
         event.Skip();
     });
+
+    GetMainWindow()->Bind(wxEVT_LEFT_UP, [this](wxMouseEvent& event) {
+        wxDataViewItem item;
+        wxDataViewColumn* col = nullptr;
+        this->HitTest(event.GetPosition(), item, col);
+        if (!item.IsOk() || col == nullptr || col->GetModelColumn() != colFilament) {
+            event.Skip();
+            return;
+        }
+
+        this->CallAfter([this, item]() {
+            if (!item.IsOk())
+                return;
+
+            UnselectAll();
+            Select(item);
+            wxMenu menu;
+            const int first_id = wxID_HIGHEST + 500;
+            std::vector<wxBitmap*> icons = get_extruder_color_icons(true);
+            for (int i = 1; i <= filaments_count(); ++i) {
+                wxMenuItem* menu_item = new wxMenuItem(&menu, first_id + i, wxString::Format("%d", i));
+                if (i <= static_cast<int>(icons.size()) && icons[i - 1] != nullptr)
+                    menu_item->SetBitmap(*icons[i - 1]);
+                menu.Append(menu_item);
+            }
+
+            menu.Bind(wxEVT_MENU, [this, first_id](wxCommandEvent& evt) {
+                const int extruder = evt.GetId() - first_id;
+                if (extruder > 0 && extruder <= filaments_count())
+                    set_extruder_for_selected_items(extruder);
+            }, first_id + 1, first_id + filaments_count());
+
+            PopupMenu(&menu);
+        });
+    });
+
 #endif //__WXMSW__
 
     Bind(wxEVT_DATAVIEW_ITEM_CONTEXT_MENU,  &ObjectList::OnContextMenu,     this);
@@ -6221,7 +6257,7 @@ void ObjectList::set_extruder_for_selected_items(const int extruder)
             const int obj_idx = m_objects_model->GetObjectIdByItem(item);
             int vol_idx = m_objects_model->GetVolumeIdByItem(item);
             vol_idx     = m_objects_model->get_real_volume_index_in_3d(obj_idx, vol_idx);
-            if ((obj_idx < m_objects->size()) && (obj_idx < (*m_objects)[obj_idx]->volumes.size())) {
+            if ((obj_idx < m_objects->size()) && (vol_idx < (*m_objects)[obj_idx]->volumes.size())) {
                 auto volume_type = (*m_objects)[obj_idx]->volumes[vol_idx]->type();
                 if (volume_type != ModelVolumeType::MODEL_PART && volume_type != ModelVolumeType::PARAMETER_MODIFIER)
                     continue;

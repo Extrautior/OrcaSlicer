@@ -131,6 +131,7 @@ class Sidebar : public wxPanel
     ConfigOptionMode    m_mode;
     //Button *         btn_sync{nullptr};
     ScalableButton *  ams_btn{nullptr};
+    ScalableButton *  cfs_btn{nullptr};
     bool                                    m_last_slice_state = false;
     SyncNozzleAndAmsDialog*                 m_sna_dialog{nullptr};
     FinishSyncAmsDialog*                    m_fna_dialog{nullptr};
@@ -141,6 +142,9 @@ class Sidebar : public wxPanel
     SyncAmsInfoDialog*                      m_sync_dlg{nullptr};
 
     void update_sync_ams_btn_enable(wxUpdateUIEvent &e);
+    bool can_sync_creality_cfs() const;
+    bool load_creality_cfs_list();
+    void show_creality_cfs_slots();
 
 public:
     enum DockingState
@@ -332,6 +336,8 @@ public:
     // SoftFever
     void calib_pa(const Calib_Params& params);
     void calib_flowrate(bool is_linear, int pass);
+    //ORCA: Add pattern parameter to calib_flowrate
+    void calib_flowrate(bool is_linear, int pass, InfillPattern pattern);
     void calib_temp(const Calib_Params& params);
     void calib_max_vol_speed(const Calib_Params& params);
     void calib_retraction(const Calib_Params& params);
@@ -644,6 +650,8 @@ public:
     void search(bool plater_is_active, Preset::Type  type, wxWindow *tag, TextInput *etag, wxWindow *stag);
     void mirror(Axis axis);
     void split_object();
+    void split_object(bool auto_drop);
+    void split_object(int obj_idx, bool auto_drop = true);
     void split_volume();
     void optimize_rotation();
     // find all empty cells on the plate and won't overlap with exclusion areas
@@ -662,6 +670,7 @@ public:
     bool can_decrease_instances() const;
     bool can_set_instance_to_object() const;
     bool can_fix_through_netfabb() const;
+    bool can_fix_through_cgal() const;
     bool can_simplify() const;
     bool can_smooth_mesh() const;
     bool can_split_to_objects() const;
