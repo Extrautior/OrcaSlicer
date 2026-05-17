@@ -3852,14 +3852,20 @@ static void update_dark_children_ui(wxWindow* window, bool just_buttons_update =
     /*bool is_btn = dynamic_cast<wxButton*>(window) != nullptr;
     is_btn = false;*/
     if (!window) return;
+    if (window->IsBeingDeleted()) return;
 
-    if (ScalableButton* btn = dynamic_cast<ScalableButton*>(window)) {
-        btn->UpdateDarkUI();
-    } else {
-        wxGetApp().UpdateDarkUI(window);
+    try {
+        if (ScalableButton* btn = dynamic_cast<ScalableButton*>(window)) {
+            btn->UpdateDarkUI();
+        } else {
+            wxGetApp().UpdateDarkUI(window);
+        }
+    } catch (...) {
+        BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": skipped dark UI update for a window that is not ready";
+        return;
     }
 
-    auto children = window->GetChildren();
+    wxWindowList children = window->GetChildren();
     for (auto child : children) {
         update_dark_children_ui(child);
     }
