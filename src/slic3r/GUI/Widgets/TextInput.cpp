@@ -4,6 +4,7 @@
 #include "slic3r/GUI/Widgets/Label.hpp"
 
 #include <wx/dcclient.h>
+#include <wx/dcbuffer.h>
 #include <wx/dcgraph.h>
 
 BEGIN_EVENT_TABLE(TextInput, StaticBox)
@@ -30,6 +31,7 @@ TextInput::TextInput()
                               std::make_pair(0xDBDBDB, (int) StateColor::Normal));
     background_color = StateColor(std::make_pair(0xF0F0F1, (int) StateColor::Disabled), std::make_pair(*wxWHITE, (int) StateColor::Normal));
     SetFont(Label::Body_12);
+    SetBackgroundStyle(wxBG_STYLE_PAINT);
 }
 
 TextInput::TextInput(wxWindow *     parent,
@@ -211,8 +213,9 @@ void TextInput::DoSetToolTipText(wxString const &tip)
 
 void TextInput::paintEvent(wxPaintEvent &evt)
 {
-    // depending on your system you may need to look at double-buffered dcs
-    wxPaintDC dc(this);
+    wxAutoBufferedPaintDC dc(this);
+    dc.SetBackground(wxBrush(GetBackgroundColour()));
+    dc.Clear();
     render(dc);
 }
 

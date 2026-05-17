@@ -2386,6 +2386,49 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(0.0));
 
+    def = this->add("creality_flush_time", coFloat);
+    def->label = L("Time per flushing");
+    def->tooltip = L("Time per flushing");
+    def->sidetext = L("s");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.0));
+
+    def = this->add("default_flush_multiplier", coFloat);
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(1.3));
+
+    def = this->add("flush_box_first_clean_length", coInt);
+    def->label = L("Flush length (first segment)");
+    def->tooltip = L("First segment length used to split flush_length into flush_length_1..N for change filament G-code.");
+    def->sidetext = L("mm");
+    def->min = 1;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(90));
+
+    def = this->add("flush_box_need_clean_length", coInt);
+    def->label = L("Flush length (standard segment)");
+    def->tooltip = L("Standard segment length used to split flush_length into flush_length_1..N for change filament G-code.");
+    def->sidetext = L("mm");
+    def->min = 1;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(70));
+
+    def = this->add("flush_box_need_clean_length_max", coInt);
+    def->label = L("Flush length (max segment)");
+    def->tooltip = L("Maximum segment length used to split flush_length into flush_length_1..N for change filament G-code.");
+    def->sidetext = L("mm");
+    def->min = 1;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(100));
+
+    def = this->add("multicolor_method", coBool);
+    def->label = L("multicolor method");
+    def->tooltip = L("multicolor method");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
     def = this->add("machine_unload_filament_time", coFloat);
     def->label = L("Filament unload time");
     def->tooltip = L("Time to unload old filament when switch filament. It's usually applicable for single-extruder multi-material machines. "

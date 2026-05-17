@@ -64,6 +64,15 @@ if (SLIC3R_GUI)
         list(FILTER wxWidgets_LIBRARIES EXCLUDE REGEX expat)
         list(APPEND wxWidgets_LIBRARIES ${EXPAT_LIBRARIES})
     endif ()
+
+    if (WIN32)
+        foreach(WX_EXTRA_LIB wxwebp wxwebpdemux wxsharpyuv)
+            find_library(${WX_EXTRA_LIB}_LIBRARY NAMES ${WX_EXTRA_LIB} PATHS "${wxWidgets_LIB_DIR}" NO_DEFAULT_PATH)
+            if(${WX_EXTRA_LIB}_LIBRARY)
+                list(APPEND wxWidgets_LIBRARIES ${${WX_EXTRA_LIB}_LIBRARY})
+            endif()
+        endforeach()
+    endif()
     
     # This is an issue in the new wxWidgets cmake build, doesn't deal with librt
     find_library(LIBRT rt)

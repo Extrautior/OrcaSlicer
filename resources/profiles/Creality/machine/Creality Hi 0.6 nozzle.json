@@ -14,6 +14,12 @@
     ],
     "nozzle_type": "hardened_steel",
     "nozzle_volume": "183",
+    "creality_flush_time": "105",
+    "default_flush_multiplier": "1.3",
+    "flush_box_first_clean_length": "90",
+    "flush_box_need_clean_length": "70",
+    "flush_box_need_clean_length_max": "100",
+    "multicolor_method": "1",
     "printer_variant": "0.6",
     "printable_area": [
         "0x0",
@@ -132,12 +138,13 @@
     ],
     "single_extruder_multi_material": "1",
     "machine_load_filament_time": "105",
+    "prime_volume": "2",
     "machine_pause_gcode": "PAUSE",
     "change_filament_gcode": "G2 Z{z_after_toolchange + 0.4} I0.86 J0.86 P1 F10000 ; spiral lift a little from second lift\nG1 X260 Y180 F30000\nG1 Z{z_after_toolchange} F600",
     "default_filament_profile": [
         "Creality Generic PLA @Hi-all"
     ],
-    "machine_start_gcode": "M140 S0\nM104 S0 \nSTART_PRINT EXTRUDER_TEMP=[nozzle_temperature_initial_layer] BED_TEMP=[bed_temperature_initial_layer_single]\nT[initial_no_support_extruder]\nM109 S[nozzle_temperature_initial_layer]\nM204 S2000\nG1 Z3 F600\nM83\nG1 Y150 F12000\nG1 X0 F12000\nG1 Z0.2 F600\nG1 X0 Y150 F6000\nG1 X0 Y0 E15 F6000\nG1 X150 Y0 E15 F6000\nG92 E0\nG1 Z1 F600",
+    "machine_start_gcode": "M140 S0\nM104 S0 \nSTART_PRINT EXTRUDER_TEMP=[nozzle_temperature_initial_layer] BED_TEMP=[bed_temperature_initial_layer_single]\nT[initial_no_support_extruder]\nM104 S[nozzle_temperature_initial_layer]\nM204 S2000\nG1 Z3 F600\nM83\nG1 Y150 F12000\nG1 X0 F12000\nG1 Z0.2 F600\nG1 X0 Y150 F6000\nG1 E0.8 F300\nG1 X0 Y0 E9 F{filament_max_volumetric_speed[initial_extruder]/0.3*60}\nG1 X150 Y0 E9 F{filament_max_volumetric_speed[initial_extruder]/0.3*60}\nG92 E0\nG1 Z1 F600",
     "machine_end_gcode": "END_PRINT",
     "scan_first_layer": "0",
     "thumbnails": [

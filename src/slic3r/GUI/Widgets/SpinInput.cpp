@@ -4,6 +4,7 @@
 #include "TextCtrl.h"
 
 #include <wx/dcgraph.h>
+#include <wx/dcbuffer.h>
 
 BEGIN_EVENT_TABLE(SpinInput, StaticBox)
 
@@ -29,6 +30,7 @@ SpinInput::SpinInput()
     border_color     = StateColor(std::make_pair(0xDBDBDB, (int) StateColor::Disabled), std::make_pair(0x009688, (int) StateColor::Hovered),
                               std::make_pair(0xDBDBDB, (int) StateColor::Normal));
     background_color = StateColor(std::make_pair(0xF0F0F1, (int) StateColor::Disabled), std::make_pair(*wxWHITE, (int) StateColor::Normal));
+    SetBackgroundStyle(wxBG_STYLE_PAINT);
 }
 
 
@@ -167,8 +169,9 @@ bool SpinInput::Enable(bool enable)
 
 void SpinInput::paintEvent(wxPaintEvent& evt)
 {
-    // depending on your system you may need to look at double-buffered dcs
-    wxPaintDC dc(this);
+    wxAutoBufferedPaintDC dc(this);
+    dc.SetBackground(wxBrush(GetBackgroundColour()));
+    dc.Clear();
     render(dc);
 }
 

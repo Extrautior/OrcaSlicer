@@ -3065,6 +3065,8 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
     //BBS: gcode writer doesn't know where the real position of extruder is after inserting custom gcode
     m_writer.set_current_position_clear(false);
     m_start_gcode_filament = GCodeProcessor::get_gcode_last_filament(machine_start_gcode);
+    if (custom_gcode_changes_tool(machine_start_gcode, m_writer.toolchange_prefix(), initial_extruder_id))
+        m_writer.init_extruder(initial_extruder_id);
 
     if (is_bbl_printers) {
         m_writer.init_extruder(initial_non_support_extruder_id);
@@ -5399,6 +5401,8 @@ void GCode::append_full_config(const Print &print, std::string &str)
     DynamicPrintConfig cfg = print.full_print_config();
     const auto* host_type_opt = cfg.option<ConfigOptionEnum<PrintHostType>>("host_type");
     const bool is_creality_print_host = host_type_opt && host_type_opt->value == htCrealityPrint;
+    const auto* printer_model_opt = cfg.option<ConfigOptionString>("printer_model");
+    const bool is_creality_hi = printer_model_opt && printer_model_opt->value == "Creality Hi";
     { // correct the flush_volumes_matrix with flush_multiplier values
         std::vector<double> temp_cfg_flush_multiplier = cfg.option<ConfigOptionFloats>("flush_multiplier")->values;
         std::vector<double> temp_flush_volumes_matrix = cfg.option<ConfigOptionFloats>("flush_volumes_matrix")->values;
@@ -5438,9 +5442,20 @@ void GCode::append_full_config(const Print &print, std::string &str)
     auto is_banned = [](const std::string &key) {
         return banned_keys.find(key) != banned_keys.end();
     };
+    static const std::set<std::string_view> creality_hi_metadata_keys({
+        "creality_flush_time"sv,
+        "default_flush_multiplier"sv,
+        "flush_box_first_clean_length"sv,
+        "flush_box_need_clean_length"sv,
+        "flush_box_need_clean_length_max"sv,
+        "multicolor_method"sv,
+    });
+    auto is_creality_hi_metadata = [](const std::string &key) {
+        return creality_hi_metadata_keys.find(key) != creality_hi_metadata_keys.end();
+    };
     std::ostringstream ss;
     for (const std::string& key : cfg.keys()) {
-        if (!is_banned(key) && !cfg.option(key)->is_nil()) {
+        if (!is_banned(key) && !(is_creality_hi && is_creality_hi_metadata(key)) && !cfg.option(key)->is_nil()) {
             if (key == "flush_volumes_matrix")
                 ss << "; flush_volumes_changed = 1\n";
             if (key == "wipe_tower_x" || key == "wipe_tower_y") {
@@ -5451,6 +5466,25 @@ void GCode::append_full_config(const Print &print, std::string &str)
             else
                 ss << "; " << key << " = " << cfg.opt_serialize(key) << "\n";
         }
+    }
+    if (is_creality_hi) {
+        auto append_float = [&ss, &cfg](const char *key, double fallback) {
+            const auto *opt = cfg.option<ConfigOptionFloat>(key);
+            const double value = opt && opt->value > 0.0 ? opt->value : fallback;
+            ss << "; " << key << " = " << value << "\n";
+        };
+        auto append_int = [&ss, &cfg](const char *key, int fallback) {
+            const auto *opt = cfg.option<ConfigOptionInt>(key);
+            const int value = opt && opt->value > 0 ? opt->value : fallback;
+            ss << "; " << key << " = " << value << "\n";
+        };
+
+        ss << "; multicolor_method = 1\n";
+        append_float("creality_flush_time", 105.0);
+        append_float("default_flush_multiplier", 1.3);
+        append_int("flush_box_first_clean_length", 90);
+        append_int("flush_box_need_clean_length", 70);
+        append_int("flush_box_need_clean_length_max", 100);
     }
     str += ss.str();
 }
