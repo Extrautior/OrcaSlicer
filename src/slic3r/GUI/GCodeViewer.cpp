@@ -97,6 +97,49 @@ else if (view_type == libvgcode::EViewType::LayerTimeLogarithmic)
     return "";
 }
 
+static bool has_recorded_flush_volume(const PrintEstimatedStatistics& statistics)
+{
+    for (const auto& [_, volume] : statistics.flush_per_filament)
+        if (volume > EPSILON)
+            return true;
+    return false;
+}
+
+static std::map<size_t, double> estimate_flush_volumes_from_matrix(
+    const std::map<std::pair<int, int>, int>& filament_change_count_map,
+    size_t filaments_count)
+{
+    std::map<size_t, double> estimated_flush_volumes;
+    if (filament_change_count_map.empty() || filaments_count == 0)
+        return estimated_flush_volumes;
+
+    const auto* matrix_option = wxGetApp().preset_bundle->project_config.option<ConfigOptionFloats>("flush_volumes_matrix");
+    if (matrix_option == nullptr || matrix_option->values.empty())
+        return estimated_flush_volumes;
+
+    const std::vector<double> flush_matrix = get_flush_volumes_matrix(matrix_option->values, 0, 1);
+    const size_t matrix_side = static_cast<size_t>(std::sqrt(static_cast<double>(flush_matrix.size())) + EPSILON);
+    if (matrix_side == 0 || matrix_side * matrix_side != flush_matrix.size())
+        return estimated_flush_volumes;
+
+    const size_t usable_filaments = std::min(filaments_count, matrix_side);
+    for (const auto& [from_to, change_count] : filament_change_count_map) {
+        const int from_filament = from_to.first;
+        const int to_filament = from_to.second;
+        if (change_count <= 0 || from_filament < 0 || to_filament < 0)
+            continue;
+
+        const size_t from = static_cast<size_t>(from_filament);
+        const size_t to = static_cast<size_t>(to_filament);
+        if (from >= usable_filaments || to >= usable_filaments || from == to)
+            continue;
+
+        estimated_flush_volumes[to] += flush_matrix[from * matrix_side + to] * static_cast<double>(change_count);
+    }
+
+    return estimated_flush_volumes;
+}
+
 // Find an index of a value in a sorted vector, which is in <z-eps, z+eps>.
 // Returns -1 if there is no such member.
 static int find_close_layer_idx(const std::vector<double> &zs, double &z, double eps)
@@ -2537,7 +2580,8 @@ void GCodeViewer::render_all_plates_stats(const std::vector<const GCodeProcessor
         PartPlateList& plate_list = wxGetApp().plater()->get_partplate_list();
         for (auto plate : plate_list.get_nonempty_plate_list())
         {
-            auto plate_print_statistics = plate->get_slice_result()->print_statistics;
+            auto slice_result = plate->get_slice_result();
+            auto plate_print_statistics = slice_result->print_statistics;
             auto plate_extruders = plate->get_extruders(true);
             for (size_t extruder_id : plate_extruders) {
                 extruder_id -= 1;
@@ -2566,6 +2610,17 @@ void GCodeViewer::render_all_plates_stats(const std::vector<const GCodeProcessor
                     support_volume_of_extruders_all_plates[extruder_id] += support_volume;
                 }
             }
+
+            if (!has_recorded_flush_volume(plate_print_statistics)) {
+                auto estimated_flush_volumes = estimate_flush_volumes_from_matrix(
+                    slice_result->filament_change_count_map,
+                    slice_result->filaments_count > 0 ? slice_result->filaments_count : filament_diameters.size());
+                for (const auto& [extruder_id, volume] : estimated_flush_volumes) {
+                    model_volume_of_extruders_all_plates[static_cast<int>(extruder_id)] += 0;
+                    flushed_volume_of_extruders_all_plates[static_cast<int>(extruder_id)] += volume;
+                }
+            }
+
             const PrintEstimatedStatistics::Mode& plate_time_mode = plate_print_statistics.modes[static_cast<size_t>(m_viewer.get_time_mode())];
             total_time_all_plates += plate_time_mode.time;
 
@@ -3410,6 +3465,12 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
     double unit_conver = imperial_units ? GizmoObjectManipulation::oz_to_g : 1;
     std::vector<double> used_filaments_m;
     std::vector<double> used_filaments_g;
+    std::map<size_t, double> estimated_flush_volumes;
+    if (!has_recorded_flush_volume(m_print_statistics) && m_gcode_result != nullptr) {
+        estimated_flush_volumes = estimate_flush_volumes_from_matrix(
+            m_gcode_result->filament_change_count_map,
+            m_gcode_result->filaments_count > 0 ? m_gcode_result->filaments_count : m_filament_diameters.size());
+    }
 
     // used filament statistics
     for (size_t extruder_id : m_viewer.get_used_extruders_ids()) {
@@ -3445,18 +3506,22 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
     }
 
     for (size_t extruder_id : m_viewer.get_used_extruders_ids()) {
-        if (m_print_statistics.flush_per_filament.find(extruder_id) == m_print_statistics.flush_per_filament.end()) {
+        auto flush_it = m_print_statistics.flush_per_filament.find(extruder_id);
+        auto estimated_flush_it = estimated_flush_volumes.find(extruder_id);
+        if (flush_it == m_print_statistics.flush_per_filament.end() && estimated_flush_it == estimated_flush_volumes.end()) {
             flushed_filaments_m.push_back(0.0);
             flushed_filaments_g.push_back(0.0);
         }
         else {
-            double volume = m_print_statistics.flush_per_filament.at(extruder_id);
+            double volume = flush_it != m_print_statistics.flush_per_filament.end() && flush_it->second > EPSILON ?
+                flush_it->second : (estimated_flush_it != estimated_flush_volumes.end() ? estimated_flush_it->second : 0.0);
             auto [flushed_filament_m, flushed_filament_g] = get_used_filament_from_volume(volume, extruder_id);
             flushed_filaments_m.push_back(flushed_filament_m);
             flushed_filaments_g.push_back(flushed_filament_g);
             total_flushed_filament_m += flushed_filament_m;
             total_flushed_filament_g += flushed_filament_g;
-            displayed_columns |= ColumnData::Flushed;
+            if (flushed_filament_m != 0.0 || flushed_filament_g != 0.0)
+                displayed_columns |= ColumnData::Flushed;
         }
     }
 
