@@ -208,8 +208,11 @@ private:
     };
 
     const char* CONFIG_KEY_ENABLESELFTEST = "crealityprint_enable_self_test";
+    const char* CONFIG_KEY_USE_EXTERNAL_SPOOL = "crealityprint_use_external_spool";
 
     bool m_enableSelfTest {false};
+    bool m_useExternalSpool {false};
+    int  m_external_slot_index {-1};
     PrintHost* m_printhost {nullptr};
     std::vector<PrinterSlot> m_printer_slots;
     std::vector<BitmapComboBox*> m_slot_combos;

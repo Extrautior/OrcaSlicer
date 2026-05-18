@@ -14,6 +14,7 @@
 #include <wx/wupdlock.h>
 #include <wx/debug.h>
 #include <wx/msgdlg.h>
+#include <wx/radiobut.h>
 
 #include <boost/log/trivial.hpp>
 #include <boost/filesystem.hpp>
@@ -995,6 +996,10 @@ void CrealityPrintHostSendDialog::init()
     if (!saved.empty()) {
         try { m_enableSelfTest = std::stoi(saved) != 0; } catch (...) {}
     }
+    saved = app_config->get("recent", CONFIG_KEY_USE_EXTERNAL_SPOOL);
+    if (!saved.empty()) {
+        try { m_useExternalSpool = std::stoi(saved) != 0; } catch (...) {}
+    }
 
     // Calibration checkbox
     {
@@ -1023,12 +1028,11 @@ void CrealityPrintHostSendDialog::init()
     auto* filament_colors  = full_config.option<ConfigOptionStrings>("filament_colour");
     auto* filament_types   = full_config.option<ConfigOptionStrings>("filament_type");
     int   gcode_filament_count = filament_colors ? (int)filament_colors->values.size() : 0;
-    bool  allow_ext_spool = gcode_filament_count <= 1;
 
     // Query printer for loaded materials
     {
         wxBusyCursor wait;
-        for (const auto& slot : creality_host->query_cfs_slots(allow_ext_spool)) {
+        for (const auto& slot : creality_host->query_cfs_slots(true)) {
             m_printer_slots.push_back({
                 slot.tool_id,
                 slot.type,
@@ -1037,6 +1041,39 @@ void CrealityPrintHostSendDialog::init()
                 slot.material_id
             });
         }
+    }
+
+    int cfs_slot_count = 0;
+    m_external_slot_index = -1;
+    for (int s = 0; s < (int)m_printer_slots.size(); s++) {
+        if (m_printer_slots[s].box_id == 0)
+            m_external_slot_index = s;
+        else
+            cfs_slot_count++;
+    }
+    if (m_external_slot_index < 0)
+        m_useExternalSpool = false;
+    if (cfs_slot_count == 0 && m_external_slot_index >= 0)
+        m_useExternalSpool = true;
+
+    wxRadioButton* cfs_radio = nullptr;
+    wxRadioButton* ext_radio = nullptr;
+    if (m_external_slot_index >= 0) {
+        auto* device_sizer = new wxBoxSizer(wxHORIZONTAL);
+        auto* device_label = new wxStaticText(this, wxID_ANY, _L("Filament Device"));
+        device_label->SetFont(::Label::Body_13);
+        device_label->SetForegroundColour(StateColor::darkModeColorFor(wxColour("#323A3D")));
+        device_sizer->Add(device_label, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(10));
+
+        cfs_radio = new wxRadioButton(this, wxID_ANY, _L("CFS"), wxDefaultPosition, wxDefaultSize, wxRB_GROUP);
+        ext_radio = new wxRadioButton(this, wxID_ANY, _L("Spool Holder"));
+        cfs_radio->SetValue(!m_useExternalSpool);
+        ext_radio->SetValue(m_useExternalSpool);
+        cfs_radio->Enable(cfs_slot_count > 0);
+        device_sizer->Add(cfs_radio, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
+        device_sizer->Add(ext_radio, 0, wxALIGN_CENTER_VERTICAL);
+        group_sizer->Add(device_sizer);
+        group_sizer->AddSpacer(VERT_SPACING);
     }
 
     if (gcode_filament_count > 0 && !m_printer_slots.empty()) {
@@ -1133,14 +1170,27 @@ void CrealityPrintHostSendDialog::init()
             m_slot_combos.push_back(combo);
         }
 
-        int ext_slot_idx = -1;
-        for (int s = 0; s < (int)m_printer_slots.size(); s++) {
-            if (m_printer_slots[s].box_id == 0) {
-                ext_slot_idx = s;
-                break;
+        auto apply_filament_device = [this, cfs_radio, ext_radio]() {
+            if (ext_radio)
+                m_useExternalSpool = ext_radio->GetValue();
+            AppConfig* ac = wxGetApp().app_config;
+            ac->set("recent", CONFIG_KEY_USE_EXTERNAL_SPOOL, m_useExternalSpool ? "1" : "0");
+
+            if (m_useExternalSpool && m_external_slot_index >= 0 && !m_slot_combos.empty()) {
+                m_slot_combos.front()->SetSelection(m_external_slot_index);
+                for (size_t i = 0; i < m_slot_combos.size(); i++)
+                    m_slot_combos[i]->Enable(i == 0);
+            } else {
+                for (auto* combo : m_slot_combos)
+                    combo->Enable(true);
             }
-        }
-        if (ext_slot_idx >= 0) {
+            if (cfs_radio)
+                cfs_radio->SetValue(!m_useExternalSpool);
+            if (ext_radio)
+                ext_radio->SetValue(m_useExternalSpool);
+        };
+
+        if (m_external_slot_index >= 0) {
             for (int ci = 0; ci < (int)m_slot_combos.size(); ci++) {
                 int sel = m_slot_combos[ci]->GetSelection();
                 if (sel >= 0 && sel < (int)m_printer_slots.size() &&
@@ -1154,21 +1204,37 @@ void CrealityPrintHostSendDialog::init()
             }
 
             for (auto* c : m_slot_combos) {
-                c->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent& e) {
+                c->Bind(wxEVT_COMBOBOX, [this, cfs_radio, ext_radio, apply_filament_device](wxCommandEvent& e) {
                     int sel = e.GetSelection();
                     if (sel >= 0 && sel < (int)m_printer_slots.size() &&
                         m_printer_slots[sel].box_id == 0) {
-                        for (auto* c2 : m_slot_combos) {
-                            if (c2 != e.GetEventObject())
-                                c2->Enable(false);
-                        }
+                        m_useExternalSpool = true;
+                        apply_filament_device();
                     } else {
+                        m_useExternalSpool = false;
+                        AppConfig* ac = wxGetApp().app_config;
+                        ac->set("recent", CONFIG_KEY_USE_EXTERNAL_SPOOL, "0");
                         for (auto* c2 : m_slot_combos)
                             c2->Enable(true);
+                        if (cfs_radio)
+                            cfs_radio->SetValue(true);
+                        if (ext_radio)
+                            ext_radio->SetValue(false);
                     }
                     e.Skip();
                 });
             }
+            if (cfs_radio)
+                cfs_radio->Bind(wxEVT_RADIOBUTTON, [apply_filament_device](wxCommandEvent& e) {
+                    apply_filament_device();
+                    e.Skip();
+                });
+            if (ext_radio)
+                ext_radio->Bind(wxEVT_RADIOBUTTON, [apply_filament_device](wxCommandEvent& e) {
+                    apply_filament_device();
+                    e.Skip();
+                });
+            apply_filament_device();
         }
     } else if (gcode_filament_count > 0) {
         auto* warning = new wxStaticText(this, wxID_ANY, _L("CFS slots could not be read. Upload only is still available."));
@@ -1187,6 +1253,14 @@ std::map<std::string, std::string> CrealityPrintHostSendDialog::extendedInfo() c
     info["enableSelfTest"] = m_enableSelfTest ? "1" : "0";
 
     // Color mapping: colorMatch_0, colorMatch_1, ... tab-delimited
+    if (m_useExternalSpool && m_external_slot_index >= 0 && m_external_slot_index < (int)m_printer_slots.size()) {
+        const auto& slot = m_printer_slots[m_external_slot_index];
+        info["colorMatch_0"] =
+            std::string("T1A") + "\t" + slot.type + "\t" + slot.color + "\t" +
+            std::to_string(slot.box_id) + "\t" + std::to_string(slot.material_id);
+        return info;
+    }
+
     for (int i = 0; i < (int)m_slot_combos.size(); i++) {
         int sel = m_slot_combos[i]->GetSelection();
         if (sel >= 0 && sel < (int)m_printer_slots.size()) {
