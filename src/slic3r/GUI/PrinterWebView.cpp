@@ -13,6 +13,7 @@
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/filesystem.hpp>
+#include <boost/optional.hpp>
 #include <boost/format.hpp>
 #include <boost/log/trivial.hpp>
 #include <cctype>
@@ -89,6 +90,25 @@ std::string make_info_url(const std::string& address)
         boost::algorithm::starts_with(address, "https://"))
         return address + (boost::algorithm::ends_with(address, "/") ? "info" : "/info");
     return "http://" + address + "/info";
+}
+
+std::string make_moonraker_url(const std::string& address, const std::string& path)
+{
+    std::string host = address;
+    size_t scheme = host.find("://");
+    if (scheme != std::string::npos)
+        host = host.substr(scheme + 3);
+    size_t slash = host.find('/');
+    if (slash != std::string::npos)
+        host = host.substr(0, slash);
+    size_t colon = host.find(':');
+    if (colon != std::string::npos)
+        host = host.substr(0, colon);
+
+    std::string normalized_path = path;
+    if (normalized_path.empty() || normalized_path.front() != '/')
+        normalized_path = "/" + normalized_path;
+    return "http://" + host + ":7125" + normalized_path;
 }
 
 wxString file_url_for_path(const boost::filesystem::path& path)
@@ -546,6 +566,242 @@ void PrinterWebView::send_creality_initial_state()
     send_creality_command("get_user", user);
 }
 
+boost::optional<bool> PrinterWebView::query_creality_logo_light_state() const
+{
+    json device = current_creality_device_ref();
+    std::string address = json_string_value(device, "address");
+    if (address.empty())
+        return boost::none;
+
+    json payload;
+    payload["objects"]["output_pin LED"] = json::array({"value"});
+
+    bool ok = false;
+    boost::optional<bool> state;
+    Http::post(make_moonraker_url(address, "/printer/objects/query"))
+        .header("Content-Type", "application/json")
+        .set_post_body(payload.dump())
+        .timeout_connect(2)
+        .timeout_max(4)
+        .on_complete([&](std::string body, unsigned status) {
+            if (status < 200 || status >= 300)
+                return;
+            try {
+                json response = json::parse(body);
+                const json& value = response["result"]["status"]["output_pin LED"]["value"];
+                if (value.is_number()) {
+                    state = value.get<double>() > 0.0;
+                    ok = true;
+                }
+            } catch (const std::exception& e) {
+                BOOST_LOG_TRIVIAL(warning) << "Creality logo light state parse failed: " << e.what();
+            }
+        })
+        .on_error([&](std::string, std::string err, unsigned status) {
+            BOOST_LOG_TRIVIAL(warning) << "Creality logo light state query failed: " << err << " HTTP " << status;
+        })
+        .perform_sync();
+
+    return ok ? state : boost::none;
+}
+
+bool PrinterWebView::set_creality_logo_light(bool on) const
+{
+    json device = current_creality_device_ref();
+    std::string address = json_string_value(device, "address");
+    if (address.empty())
+        return false;
+
+    json payload;
+    payload["script"] = std::string("SET_PIN PIN=LED VALUE=") + (on ? "1" : "0");
+
+    bool ok = false;
+    Http::post(make_moonraker_url(address, "/printer/gcode/script"))
+        .header("Content-Type", "application/json")
+        .set_post_body(payload.dump())
+        .timeout_connect(2)
+        .timeout_max(5)
+        .on_complete([&](std::string, unsigned status) {
+            ok = status >= 200 && status < 300;
+        })
+        .on_error([&](std::string, std::string err, unsigned status) {
+            BOOST_LOG_TRIVIAL(warning) << "Creality logo light command failed: " << err << " HTTP " << status;
+        })
+        .perform_sync();
+
+    return ok;
+}
+
+void PrinterWebView::inject_creality_logo_light_control()
+{
+    if (!m_browser || !m_creality_device_page_active)
+        return;
+
+    WebView::RunScript(m_browser, R"JS(
+        (function() {
+            function installLogoLight() {
+                if (document.getElementById("orca-logo-light-card"))
+                    return true;
+
+                const printSettingsTitle = Array.from(document.querySelectorAll("div,span,p,h1,h2,h3,h4"))
+                    .find((el) => (el.textContent || "").trim() === "Print Settings");
+                if (!printSettingsTitle)
+                    return false;
+
+                let root = printSettingsTitle.closest(".el-card, .card, section, [class*='card'], [class*='Card']");
+                if (!root)
+                    root = printSettingsTitle.parentElement && printSettingsTitle.parentElement.parentElement;
+                if (!root)
+                    return false;
+
+                let target = Array.from(root.querySelectorAll("div")).find((el) => {
+                    const text = (el.textContent || "").trim();
+                    const rect = el.getBoundingClientRect();
+                    return /LED/.test(text) && rect.width >= 70 && rect.width <= 260 && rect.height >= 60 && rect.height <= 190;
+                });
+                let parent = target && target.parentElement;
+                if (!parent)
+                    parent = root.querySelector("div") || root;
+
+                if (target) {
+                    const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+                    let node;
+                    while ((node = walker.nextNode())) {
+                        if (/LED\s*Li/i.test(node.nodeValue || "")) {
+                            node.nodeValue = (node.nodeValue || "").replace(/LED\s*Li(?:ght)?\.*/i, "LED");
+                            break;
+                        }
+                    }
+                }
+
+                const style = document.createElement("style");
+                style.id = "orca-logo-light-style";
+                style.textContent = `
+                    #orca-logo-light-card {
+                        width: 180px; min-height: 90px; padding: 18px 14px;
+                        background: #2b2b2d; border-radius: 4px; color: #fff;
+                        box-sizing: border-box; display: flex; flex-direction: column;
+                        justify-content: flex-start; gap: 12px; margin: 0 12px 12px 0;
+                        font-family: inherit;
+                    }
+                    #orca-logo-light-card .orca-logo-row {
+                        display: flex; align-items: center; justify-content: space-between; gap: 12px;
+                        font-size: 16px; line-height: 20px; white-space: nowrap;
+                    }
+                    #orca-logo-light-toggle {
+                        width: 40px; height: 20px; border-radius: 10px; border: 0; padding: 0;
+                        background: #42434a; position: relative; cursor: pointer; flex: 0 0 auto;
+                    }
+                    #orca-logo-light-toggle::after {
+                        content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%;
+                        left: 2px; top: 2px; background: #24252b; transition: left .15s, background .15s;
+                    }
+                    #orca-logo-light-toggle.orca-on { background: #1ecb65; }
+                    #orca-logo-light-toggle.orca-on::after { left: 22px; background: #e9fff1; }
+                    #orca-logo-light-status { color: #9da0aa; font-size: 13px; min-height: 16px; }
+                `;
+                if (!document.getElementById(style.id))
+                    document.head.appendChild(style);
+
+                const card = document.createElement("div");
+                card.id = "orca-logo-light-card";
+                card.innerHTML = '<div class="orca-logo-row"><span>Logo LED</span><button id="orca-logo-light-toggle" type="button" aria-label="Toggle logo LED"></button></div><div id="orca-logo-light-status">Ready</div>';
+
+                if (target && target.nextSibling)
+                    parent.insertBefore(card, target.nextSibling);
+                else
+                    parent.appendChild(card);
+
+                const button = document.getElementById("orca-logo-light-toggle");
+                const status = document.getElementById("orca-logo-light-status");
+                let current = false;
+
+                window.__orcaLogoLightSetState = function(on, text) {
+                    current = !!on;
+                    button.classList.toggle("orca-on", current);
+                    if (typeof text === "string")
+                        status.textContent = text;
+                };
+
+                button.addEventListener("click", function() {
+                    const next = !current;
+                    const previous = current;
+                    window.__orcaLogoLightSetState(next, "Sending...");
+                    const payload = JSON.stringify({
+                        command: "orca_set_logo_light",
+                        value: next ? 1 : 0
+                    });
+                    try {
+                        window.location.href = "orca-creality-logo:" + encodeURIComponent(payload);
+                    } catch (e) {
+                        window.__orcaLogoLightSetState(previous, "Failed");
+                    }
+                    setTimeout(function() {
+                        const status = document.getElementById("orca-logo-light-status");
+                        if (status && status.textContent === "Sending...")
+                            window.__orcaLogoLightSetState(previous, "Failed");
+                    }, 7000);
+                });
+                return true;
+            }
+
+            if (!installLogoLight()) {
+                let tries = 0;
+                const timer = setInterval(function() {
+                    tries += 1;
+                    if (installLogoLight() || tries > 30)
+                        clearInterval(timer);
+                }, 500);
+            }
+        })();
+    )JS");
+
+    json device = current_creality_device_ref();
+    std::string address = json_string_value(device, "address");
+    if (!address.empty()) {
+        std::thread([this, address]() {
+            bool ok = false;
+            bool on = false;
+            json payload;
+            payload["objects"]["output_pin LED"] = json::array({"value"});
+            Http::post(make_moonraker_url(address, "/printer/objects/query"))
+                .header("Content-Type", "application/json")
+                .set_post_body(payload.dump())
+                .timeout_connect(2)
+                .timeout_max(4)
+                .on_complete([&](std::string body, unsigned status) {
+                    if (status < 200 || status >= 300)
+                        return;
+                    try {
+                        json response = json::parse(body);
+                        const json& value = response["result"]["status"]["output_pin LED"]["value"];
+                        if (value.is_number()) {
+                            on = value.get<double>() > 0.0;
+                            ok = true;
+                        }
+                    } catch (const std::exception& e) {
+                        BOOST_LOG_TRIVIAL(warning) << "Creality logo light state parse failed: " << e.what();
+                    }
+                })
+                .on_error([&](std::string, std::string err, unsigned status) {
+                    BOOST_LOG_TRIVIAL(warning) << "Creality logo light state query failed: " << err << " HTTP " << status;
+                })
+                .perform_sync();
+
+            if (ok && m_browser) {
+                m_browser->CallAfter([this, on]() {
+                    if (!m_browser || !m_creality_device_page_active)
+                        return;
+                    WebView::RunScript(m_browser, wxString::Format(
+                        "(function(){var s=%s; if(window.__orcaLogoLightSetState) window.__orcaLogoLightSetState(s, 'Ready');"
+                        "setTimeout(function(){ if(window.__orcaLogoLightSetState) window.__orcaLogoLightSetState(s, 'Ready'); }, 1200);})();",
+                        on ? "true" : "false"));
+                });
+            }
+        }).detach();
+    }
+}
+
 void PrinterWebView::handle_creality_script_message(const json& message)
 {
     std::string command = json_string_value(message, "command");
@@ -612,6 +868,21 @@ void PrinterWebView::handle_creality_script_message(const json& message)
         m_creality_init_sent = false;
         if (m_browser)
             m_browser->Reload();
+    } else if (command == "orca_set_logo_light") {
+        bool on = message.value("value", 0) != 0;
+        std::thread([this, on]() {
+            bool ok = set_creality_logo_light(on);
+            if (m_browser) {
+                m_browser->CallAfter([this, ok, on]() {
+                    if (!m_browser || !m_creality_device_page_active)
+                        return;
+                    WebView::RunScript(m_browser, wxString::Format(
+                        "window.__orcaLogoLightSetState && window.__orcaLogoLightSetState(%s, '%s');",
+                        on ? "true" : "false",
+                        ok ? "Ready" : "Failed"));
+                });
+            }
+        }).detach();
     } else if (command == "get_region") {
         send_creality_command("get_region", json(wxGetApp().app_config->get("region")));
     } else if (command == "common_openurl" && message.contains("url") && message["url"].is_string()) {
@@ -712,7 +983,8 @@ void PrinterWebView::OnScriptMessage(wxWebViewEvent& evt)
         if (!m_creality_device_page_active &&
             command != "down_files" &&
             command != "common_openurl" &&
-            command != "orca_camera_watchdog_reload")
+            command != "orca_camera_watchdog_reload" &&
+            command != "orca_set_logo_light")
             return;
 
         handle_creality_script_message(message);
@@ -725,12 +997,13 @@ void PrinterWebView::OnNavigating(wxWebViewEvent& evt)
 {
     wxString url = evt.GetURL();
     const wxString download_scheme = "orca-creality-download:";
-    if (!url.StartsWith(download_scheme))
+    const wxString logo_scheme = "orca-creality-logo:";
+    if (!url.StartsWith(download_scheme) && !url.StartsWith(logo_scheme))
         return;
 
     evt.Veto();
     try {
-        wxString encoded = url.Mid(download_scheme.Length());
+        wxString encoded = url.StartsWith(download_scheme) ? url.Mid(download_scheme.Length()) : url.Mid(logo_scheme.Length());
         std::string payload = wxGetApp().url_decode(encoded.ToUTF8().data());
         json message = json::parse(payload);
         handle_creality_script_message(message);
@@ -972,6 +1245,7 @@ void PrinterWebView::OnLoaded(wxWebViewEvent &evt)
 
     if (m_creality_device_page_active) {
         send_creality_initial_state();
+        inject_creality_logo_light_control();
         if (!m_creality_camera_keepalive_timer.IsRunning())
             m_creality_camera_keepalive_timer.Start(60000);
         return;

@@ -2,6 +2,7 @@
 #define slic3r_PrinterWebView_hpp_
 
 #include <nlohmann/json.hpp>
+#include <boost/optional.hpp>
 #include <wx/panel.h>
 #include <wx/string.h>
 #include <wx/timer.h>
@@ -41,6 +42,9 @@ private:
     void send_creality_command(const std::string& command, const nlohmann::json& data);
     void send_creality_capabilities();
     void send_creality_initial_state();
+    void inject_creality_logo_light_control();
+    boost::optional<bool> query_creality_logo_light_state() const;
+    bool set_creality_logo_light(bool on) const;
     void handle_creality_script_message(const nlohmann::json& message);
 
     wxWebView* m_browser { nullptr };
